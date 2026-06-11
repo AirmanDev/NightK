@@ -12,6 +12,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             mainToggle
+            gradualTransitionToggle
             launchAtLoginToggle
             divider
             languageSection
@@ -48,6 +49,25 @@ struct ContentView: View {
             Toggle("", isOn: $controller.isEnabled)
                 .toggleStyle(.switch)
                 .labelsHidden()
+        }
+    }
+
+    private var gradualTransitionToggle: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(text.gradualTransition)
+                    .font(.body.weight(.medium))
+
+                Spacer()
+
+                Toggle("", isOn: $controller.gradualTransitionEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            Text(text.gradualTransitionHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

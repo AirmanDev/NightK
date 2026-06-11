@@ -30,3 +30,12 @@ enum DefaultSchedule {
     static let endHour = 7
     static let endMinute = 0
 }
+
+/// Gradual fade-in / fade-out behaviour at the edges of the active window.
+enum Transition {
+    /// Length of the ramp that eases the temperature in and out, in minutes.
+    static let rampMinutes = 60
+
+    /// How often the applied temperature is refreshed while ramping, in seconds.
+    static let tickInterval: TimeInterval = 30
+}

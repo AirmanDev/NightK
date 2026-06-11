@@ -33,6 +33,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 struct NightKText {
     let subtitle: String
     let enabled: String
+    let gradualTransition: String
+    let gradualTransitionHint: String
     let launchAtLogin: String
     let language: String
     let temperature: String
@@ -49,6 +51,8 @@ struct NightKText {
     static let hungarian = NightKText(
         subtitle: "Fix időzítésű kijelzőmelegítés",
         enabled: "NightK bekapcsolva",
+        gradualTransition: "Fokozatos átmenet",
+        gradualTransitionHint: "Az időszak elején egy óra alatt erősödik fel, a végén ugyanennyi alatt cseng le.",
         launchAtLogin: "Indítás bejelentkezéskor",
         language: "Nyelv",
         temperature: "Hőmérséklet",
@@ -66,6 +70,8 @@ struct NightKText {
     static let english = NightKText(
         subtitle: "Fixed schedule display warming",
         enabled: "NightK enabled",
+        gradualTransition: "Gradual transition",
+        gradualTransitionHint: "Fades in over the first hour and back out over the last.",
         launchAtLogin: "Launch at login",
         language: "Language",
         temperature: "Temperature",
@@ -91,6 +97,14 @@ final class NightKController: ObservableObject {
     @Published private(set) var launchAtLogin: Bool = LoginItem.isEnabled
 
     @Published var isEnabled: Bool {
+        didSet {
+            save()
+            scheduleNextTransition()
+            applyDebounced()
+        }
+    }
+
+    @Published var gradualTransitionEnabled: Bool {
         didSet {
             save()
             scheduleNextTransition()
@@ -136,6 +150,7 @@ final class NightKController: ObservableObject {
 
     private enum Keys {
         static let isEnabled = "NightK.isEnabled"
+        static let gradualTransitionEnabled = "NightK.gradualTransitionEnabled"
         static let temperatureKelvin = "NightK.temperatureKelvin"
         static let startHour = "NightK.startHour"
         static let startMinute = "NightK.startMinute"
@@ -168,6 +183,7 @@ final class NightKController: ObservableObject {
 
         self.temperatureKelvin = initialTemperature
         self.isEnabled = initialEnabled
+        self.gradualTransitionEnabled = defaults.bool(forKey: Keys.gradualTransitionEnabled)
         self.language = initialLanguage
         self.startTime = Self.dateForTime(hour: startHour, minute: startMinute)
         self.endTime = Self.dateForTime(hour: endHour, minute: endMinute)
@@ -233,12 +249,12 @@ final class NightKController: ObservableObject {
     }
 
     func applyNow() {
-        let shouldBeActive = isEnabled && isWithinActiveWindow(Date())
+        let temperature = effectiveTemperature(at: Date())
 
-        isCurrentlyActive = shouldBeActive
+        isCurrentlyActive = temperature != nil
 
-        if shouldBeActive {
-            DisplayGamma.applyTemperature(kelvin: temperatureKelvin)
+        if let temperature {
+            DisplayGamma.applyTemperature(kelvin: temperature)
         } else {
             DisplayGamma.restore()
         }
@@ -265,6 +281,7 @@ final class NightKController: ObservableObject {
 
     private func save() {
         defaults.set(isEnabled, forKey: Keys.isEnabled)
+        defaults.set(gradualTransitionEnabled, forKey: Keys.gradualTransitionEnabled)
         defaults.set(temperatureKelvin, forKey: Keys.temperatureKelvin)
         defaults.set(language.rawValue, forKey: Keys.language)
 
@@ -285,13 +302,8 @@ final class NightKController: ObservableObject {
 
         guard hasStarted else { return }
 
-        let now = Date()
-        let nextStart = nextDateMatchingTime(from: startTime, after: now)
-        let nextEnd = nextDateMatchingTime(from: endTime, after: now)
-        let nextFireDate = min(nextStart, nextEnd)
-
         let timer = Timer(
-            fireAt: nextFireDate,
+            fireAt: nextEvaluationDate(after: Date()),
             interval: 0,
             target: self,
             selector: #selector(timerFired),
@@ -365,6 +377,91 @@ final class NightKController: ObservableObject {
         return nowMinutes >= startMinutes || nowMinutes < endMinutes
     }
 
+    /// The colour temperature to apply at `date`, or `nil` when the display
+    /// should be left at its native profile. With gradual transitions on, the
+    /// value is interpolated between neutral and the configured target so the
+    /// warming eases in at the start of the window and back out at the end.
+    private func effectiveTemperature(at date: Date) -> Int? {
+        guard isEnabled, isWithinActiveWindow(date) else { return nil }
+
+        guard gradualTransitionEnabled else { return temperatureKelvin }
+
+        let neutral = Double(Temperature.range.upperBound)
+        let target = Double(temperatureKelvin)
+        let value = neutral + (target - neutral) * warmthProgress(at: date)
+
+        return Int(value.rounded()).clamped(to: Temperature.range)
+    }
+
+    /// How far the warming has ramped at `date`, from 0 (neutral) to 1 (full
+    /// target). Rises over the first hour of the window and falls over the last;
+    /// for windows shorter than two hours the two ramps simply meet partway.
+    private func warmthProgress(at date: Date) -> Double {
+        let calendar = Calendar.current
+        let start = Self.minutesSinceMidnight(for: startTime, calendar: calendar)
+        let end = Self.minutesSinceMidnight(for: endTime, calendar: calendar)
+        let now = Self.minutesSinceMidnight(for: date, calendar: calendar)
+
+        let total = Double(Self.windowLength(fromStart: start, toEnd: end))
+        let sinceStart = Double(Self.minutesElapsed(fromStart: start, to: now))
+        let ramp = Double(Transition.rampMinutes)
+
+        let rampUp = (sinceStart / ramp).clamped(to: 0...1)
+        let rampDown = ((total - sinceStart) / ramp).clamped(to: 0...1)
+
+        return Swift.min(rampUp, rampDown)
+    }
+
+    /// Whether the temperature is actively changing at `date`, i.e. we are
+    /// inside one of the fade ramps rather than holding at the target or off.
+    private func isWithinRamp(at date: Date) -> Bool {
+        guard gradualTransitionEnabled, isEnabled, isWithinActiveWindow(date) else {
+            return false
+        }
+
+        let calendar = Calendar.current
+        let start = Self.minutesSinceMidnight(for: startTime, calendar: calendar)
+        let end = Self.minutesSinceMidnight(for: endTime, calendar: calendar)
+        let now = Self.minutesSinceMidnight(for: date, calendar: calendar)
+
+        let total = Self.windowLength(fromStart: start, toEnd: end)
+        let sinceStart = Self.minutesElapsed(fromStart: start, to: now)
+        let ramp = Transition.rampMinutes
+
+        // Too short to ever reach the target: the whole window is one ramp.
+        if total <= 2 * ramp { return true }
+
+        return sinceStart < ramp || sinceStart >= total - ramp
+    }
+
+    /// The next instant the applied temperature should be re-evaluated: the
+    /// upcoming window edges, plus a steady tick while a ramp is in progress.
+    private func nextEvaluationDate(after date: Date) -> Date {
+        var candidates = [
+            nextDateMatchingTime(from: startTime, after: date),
+            nextDateMatchingTime(from: endTime, after: date)
+        ]
+
+        if gradualTransitionEnabled {
+            candidates.append(nextDateMatchingTime(from: shiftedTime(startTime, byMinutes: Transition.rampMinutes), after: date))
+            candidates.append(nextDateMatchingTime(from: shiftedTime(endTime, byMinutes: -Transition.rampMinutes), after: date))
+
+            if isWithinRamp(at: date) {
+                candidates.append(date.addingTimeInterval(Transition.tickInterval))
+            }
+        }
+
+        return candidates.min() ?? date.addingTimeInterval(Transition.tickInterval)
+    }
+
+    /// A clock time offset from `time` by `delta` minutes, wrapping at midnight.
+    private func shiftedTime(_ time: Date, byMinutes delta: Int) -> Date {
+        let base = Self.minutesSinceMidnight(for: time, calendar: Calendar.current)
+        let shifted = (((base + delta) % 1440) + 1440) % 1440
+
+        return Self.dateForTime(hour: shifted / 60, minute: shifted % 60)
+    }
+
     private func nextDateMatchingTime(from time: Date, after date: Date) -> Date {
         let calendar = Calendar.current
         let components = calendar.dateComponents([.hour, .minute], from: time)
@@ -409,5 +506,18 @@ final class NightKController: ObservableObject {
         let components = calendar.dateComponents([.hour, .minute], from: date)
 
         return ((components.hour ?? 0) * 60) + (components.minute ?? 0)
+    }
+
+    /// Length of the active window in minutes, handling overnight schedules.
+    /// Matching `isWithinActiveWindow`, equal edges mean an always-on window.
+    private static func windowLength(fromStart start: Int, toEnd end: Int) -> Int {
+        if start == end { return 1440 }
+
+        return start < end ? end - start : 1440 - start + end
+    }
+
+    /// Minutes elapsed from `start` to `now` on the clock, wrapping at midnight.
+    private static func minutesElapsed(fromStart start: Int, to now: Int) -> Int {
+        return (((now - start) % 1440) + 1440) % 1440
     }
 }
