@@ -52,7 +52,7 @@ struct NightKText {
         subtitle: "Fix időzítésű kijelzőmelegítés",
         enabled: "NightK bekapcsolva",
         gradualTransition: "Fokozatos átmenet",
-        gradualTransitionHint: "Az időszak elején egy óra alatt erősödik fel, a végén ugyanennyi alatt cseng le.",
+        gradualTransitionHint: "A kezdésig egy óra alatt erősödik fel, a végén ugyanennyi alatt cseng le.",
         launchAtLogin: "Indítás bejelentkezéskor",
         language: "Nyelv",
         temperature: "Hőmérséklet",
@@ -71,7 +71,7 @@ struct NightKText {
         subtitle: "Fixed schedule display warming",
         enabled: "NightK enabled",
         gradualTransition: "Gradual transition",
-        gradualTransitionHint: "Fades in over the first hour and back out over the last.",
+        gradualTransitionHint: "Fades in during the hour before start and back out over the last.",
         launchAtLogin: "Launch at login",
         language: "Language",
         temperature: "Temperature",
@@ -366,25 +366,23 @@ final class NightKController: ObservableObject {
         let startMinutes = Self.minutesSinceMidnight(for: startTime, calendar: calendar)
         let endMinutes = Self.minutesSinceMidnight(for: endTime, calendar: calendar)
 
-        if startMinutes == endMinutes {
-            return true
-        }
-
-        if startMinutes < endMinutes {
-            return nowMinutes >= startMinutes && nowMinutes < endMinutes
-        }
-
-        return nowMinutes >= startMinutes || nowMinutes < endMinutes
+        return Self.isMinute(nowMinutes, inWindowFrom: startMinutes, to: endMinutes)
     }
 
     /// The colour temperature to apply at `date`, or `nil` when the display
     /// should be left at its native profile. With gradual transitions on, the
     /// value is interpolated between neutral and the configured target so the
-    /// warming eases in at the start of the window and back out at the end.
+    /// warming reaches full strength at the start time and eases out at the end.
     private func effectiveTemperature(at date: Date) -> Int? {
-        guard isEnabled, isWithinActiveWindow(date) else { return nil }
+        guard isEnabled else { return nil }
 
-        guard gradualTransitionEnabled else { return temperatureKelvin }
+        if !gradualTransitionEnabled {
+            guard isWithinActiveWindow(date) else { return nil }
+
+            return temperatureKelvin
+        }
+
+        guard isWithinWarmthWindow(date) else { return nil }
 
         let neutral = Double(Temperature.range.upperBound)
         let target = Double(temperatureKelvin)
@@ -394,20 +392,24 @@ final class NightKController: ObservableObject {
     }
 
     /// How far the warming has ramped at `date`, from 0 (neutral) to 1 (full
-    /// target). Rises over the first hour of the window and falls over the last;
-    /// for windows shorter than two hours the two ramps simply meet partway.
+    /// target). Rises over the hour before the start time and falls over the
+    /// last hour; for short windows the two ramps simply meet partway.
     private func warmthProgress(at date: Date) -> Double {
         let calendar = Calendar.current
         let start = Self.minutesSinceMidnight(for: startTime, calendar: calendar)
         let end = Self.minutesSinceMidnight(for: endTime, calendar: calendar)
         let now = Self.minutesSinceMidnight(for: date, calendar: calendar)
+        let ramp = Transition.rampMinutes
 
-        let total = Double(Self.windowLength(fromStart: start, toEnd: end))
-        let sinceStart = Double(Self.minutesElapsed(fromStart: start, to: now))
-        let ramp = Double(Transition.rampMinutes)
+        if start == end { return 1 }
 
-        let rampUp = (sinceStart / ramp).clamped(to: 0...1)
-        let rampDown = ((total - sinceStart) / ramp).clamped(to: 0...1)
+        let warmupStart = Self.wrappedMinute(start - ramp)
+        let total = Double(Self.windowLength(fromStart: warmupStart, toEnd: end))
+        let sinceWarmup = Double(Self.minutesElapsed(fromStart: warmupStart, to: now))
+        let rampLength = Double(ramp)
+
+        let rampUp = (sinceWarmup / rampLength).clamped(to: 0...1)
+        let rampDown = ((total - sinceWarmup) / rampLength).clamped(to: 0...1)
 
         return Swift.min(rampUp, rampDown)
     }
@@ -415,7 +417,7 @@ final class NightKController: ObservableObject {
     /// Whether the temperature is actively changing at `date`, i.e. we are
     /// inside one of the fade ramps rather than holding at the target or off.
     private func isWithinRamp(at date: Date) -> Bool {
-        guard gradualTransitionEnabled, isEnabled, isWithinActiveWindow(date) else {
+        guard gradualTransitionEnabled, isEnabled, isWithinWarmthWindow(date) else {
             return false
         }
 
@@ -423,15 +425,18 @@ final class NightKController: ObservableObject {
         let start = Self.minutesSinceMidnight(for: startTime, calendar: calendar)
         let end = Self.minutesSinceMidnight(for: endTime, calendar: calendar)
         let now = Self.minutesSinceMidnight(for: date, calendar: calendar)
-
-        let total = Self.windowLength(fromStart: start, toEnd: end)
-        let sinceStart = Self.minutesElapsed(fromStart: start, to: now)
         let ramp = Transition.rampMinutes
+
+        if start == end { return false }
+
+        let warmupStart = Self.wrappedMinute(start - ramp)
+        let total = Self.windowLength(fromStart: warmupStart, toEnd: end)
+        let sinceWarmup = Self.minutesElapsed(fromStart: warmupStart, to: now)
 
         // Too short to ever reach the target: the whole window is one ramp.
         if total <= 2 * ramp { return true }
 
-        return sinceStart < ramp || sinceStart >= total - ramp
+        return sinceWarmup < ramp || sinceWarmup >= total - ramp
     }
 
     /// The next instant the applied temperature should be re-evaluated: the
@@ -443,7 +448,7 @@ final class NightKController: ObservableObject {
         ]
 
         if gradualTransitionEnabled {
-            candidates.append(nextDateMatchingTime(from: shiftedTime(startTime, byMinutes: Transition.rampMinutes), after: date))
+            candidates.append(nextDateMatchingTime(from: shiftedTime(startTime, byMinutes: -Transition.rampMinutes), after: date))
             candidates.append(nextDateMatchingTime(from: shiftedTime(endTime, byMinutes: -Transition.rampMinutes), after: date))
 
             if isWithinRamp(at: date) {
@@ -457,7 +462,7 @@ final class NightKController: ObservableObject {
     /// A clock time offset from `time` by `delta` minutes, wrapping at midnight.
     private func shiftedTime(_ time: Date, byMinutes delta: Int) -> Date {
         let base = Self.minutesSinceMidnight(for: time, calendar: Calendar.current)
-        let shifted = (((base + delta) % 1440) + 1440) % 1440
+        let shifted = Self.wrappedMinute(base + delta)
 
         return Self.dateForTime(hour: shifted / 60, minute: shifted % 60)
     }
@@ -508,6 +513,30 @@ final class NightKController: ObservableObject {
         return ((components.hour ?? 0) * 60) + (components.minute ?? 0)
     }
 
+    private static func isMinute(_ minute: Int, inWindowFrom start: Int, to end: Int) -> Bool {
+        if start == end { return true }
+
+        if start < end {
+            return minute >= start && minute < end
+        }
+
+        return minute >= start || minute < end
+    }
+
+    private func isWithinWarmthWindow(_ date: Date) -> Bool {
+        let calendar = Calendar.current
+
+        let now = Self.minutesSinceMidnight(for: date, calendar: calendar)
+        let start = Self.minutesSinceMidnight(for: startTime, calendar: calendar)
+        let end = Self.minutesSinceMidnight(for: endTime, calendar: calendar)
+
+        if start == end { return true }
+
+        let warmupStart = Self.wrappedMinute(start - Transition.rampMinutes)
+
+        return Self.isMinute(now, inWindowFrom: warmupStart, to: end)
+    }
+
     /// Length of the active window in minutes, handling overnight schedules.
     /// Matching `isWithinActiveWindow`, equal edges mean an always-on window.
     private static func windowLength(fromStart start: Int, toEnd end: Int) -> Int {
@@ -518,6 +547,10 @@ final class NightKController: ObservableObject {
 
     /// Minutes elapsed from `start` to `now` on the clock, wrapping at midnight.
     private static func minutesElapsed(fromStart start: Int, to now: Int) -> Int {
-        return (((now - start) % 1440) + 1440) % 1440
+        return wrappedMinute(now - start)
+    }
+
+    private static func wrappedMinute(_ minute: Int) -> Int {
+        return ((minute % 1440) + 1440) % 1440
     }
 }

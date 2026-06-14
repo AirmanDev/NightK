@@ -17,8 +17,8 @@ restores the normal profile outside the scheduled window.
 
 - Warm the display between a configurable **start** and **end** time
   (overnight windows such as 20:00 - 07:00 are supported).
-- Optional **gradual transition** that eases the warming in over the first
-  hour of the window and back out over the last, instead of snapping on/off.
+- Optional **gradual transition** that eases the warming in during the hour
+  before the start time and back out over the last, instead of snapping on/off.
 - Adjustable color **temperature** from 1000 K to 6500 K.
 - Works across **multiple displays** and re-applies on wake / display changes.
 - **English / Hungarian** UI.
