@@ -10,8 +10,13 @@
 
 NightK lives in the menu bar and gently shifts your screen toward warmer
 (more orange) colors during the hours you choose, easy on the eyes at night.
-It adjusts the display color temperature using the CoreGraphics gamma API and
-restores the normal profile outside the scheduled window.
+NightK exclusively uses the **CoreGraphics hardware gamma table API**. It does
+not install colour overlays, virtual displays, or replace ICC colour profiles.
+The macOS 27.2 / M5 Pro OS driver can report success while failing to apply a
+gamma LUT physically. NightK now uses the display's reported gamma table
+capacity (1024 entries on Mac17,8), instead of always writing 256 samples.
+This fixes the buffer-size assumption but **cannot guarantee** the Apple driver
+will apply the data. See `docs/GAMMA-MACOS-27.md`.
 
 ## Features
 
@@ -23,6 +28,11 @@ restores the normal profile outside the scheduled window.
 - Works across **multiple displays** and re-applies on wake / display changes.
 - **English / Hungarian** UI.
 - Sandboxed menu-bar agent: no Dock icon, minimal CPU/RAM.
+- Gamma LUT capacity detection, API error diagnostics, and isolated curve tests.
+
+Run `scripts/test-gamma.sh` for curve regression tests and
+`scripts/release.sh build` to check Release compilation. The app does **not**
+claim gamma is visible merely because CoreGraphics returns success.
 
 ## Requirements
 

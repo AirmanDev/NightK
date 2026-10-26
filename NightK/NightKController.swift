@@ -251,12 +251,11 @@ final class NightKController: ObservableObject {
     func applyNow() {
         let temperature = effectiveTemperature(at: Date())
 
-        isCurrentlyActive = temperature != nil
-
         if let temperature {
-            DisplayGamma.applyTemperature(kelvin: temperature)
+            isCurrentlyActive = DisplayGamma.applyTemperature(kelvin: temperature)
         } else {
             DisplayGamma.restore()
+            isCurrentlyActive = false
         }
     }
 

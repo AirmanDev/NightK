@@ -31,28 +31,58 @@ build() {
 
 install_app() {
     build
-    echo "==> Stopping any running instance"
-    pkill -f "$APP_NAME.app/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+    codesign --verify --deep --strict "$APP"
+    local stage previous
+    stage="$(mktemp -d /Applications/.NightK-install.XXXXXXXX)"
+    previous="$stage/previous.app"
+    ditto "$APP" "$stage/$APP_NAME.app"
+    codesign --verify --deep --strict "$stage/$APP_NAME.app"
+    echo "==> Replacing the installed app (rollback on failed launch)"
+    pkill -f "^$DEST/Contents/MacOS/$APP_NAME$" 2>/dev/null || true
     sleep 1
-    echo "==> Installing to $DEST"
-    rm -rf "$DEST"
-    ditto "$APP" "$DEST"
-    echo "==> Launching"
-    open "$DEST"
-    echo "==> Done: installed and launched from /Applications"
+    if [[ -d "$DEST" ]]; then mv "$DEST" "$previous"; fi
+    if ! mv "$stage/$APP_NAME.app" "$DEST"; then
+        [[ ! -d "$previous" ]] || mv "$previous" "$DEST"
+        rm -rf "$stage"
+        return 1
+    fi
+    if ! open "$DEST"; then
+        rm -rf "$DEST"
+        [[ ! -d "$previous" ]] || { mv "$previous" "$DEST"; open "$DEST" || true; }
+        rm -rf "$stage"
+        return 1
+    fi
+    sleep 3
+    if ! pgrep -f "^$DEST/Contents/MacOS/$APP_NAME$" >/dev/null; then
+        rm -rf "$DEST"
+        [[ ! -d "$previous" ]] || { mv "$previous" "$DEST"; open "$DEST" || true; }
+        rm -rf "$stage"
+        echo "NightK failed to launch; previous version restored" >&2
+        return 1
+    fi
+    rm -rf "$stage"
+    echo "==> Installed and launched $DEST"
 }
 
 make_dmg() {
     build
     mkdir -p "$DIST"
-    local stage
+    local stage candidate
     stage="$(mktemp -d)"
+    candidate="$DIST/.NightK-release-$$.dmg"
     ditto "$APP" "$stage/$APP_NAME.app"
     ln -s /Applications "$stage/Applications"
-    rm -f "$DIST/$APP_NAME.dmg"
-    hdiutil create -volname "$APP_NAME" -srcfolder "$stage" -ov -format UDZO "$DIST/$APP_NAME.dmg" >/dev/null
+    if ! hdiutil create -volname "$APP_NAME" -srcfolder "$stage" -ov -format UDZO "$candidate" >/dev/null; then
+        rm -rf "$stage" "$candidate"
+        return 1
+    fi
+    if ! hdiutil imageinfo "$candidate" >/dev/null; then
+        rm -rf "$stage" "$candidate"
+        return 1
+    fi
+    mv -f "$candidate" "$DIST/$APP_NAME.dmg"
     rm -rf "$stage"
-    echo "==> Done: $DIST/$APP_NAME.dmg"
+    echo "==> Verified DMG: $DIST/$APP_NAME.dmg"
 }
 
 case "${1:-install}" in
