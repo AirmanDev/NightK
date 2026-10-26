@@ -18,6 +18,7 @@ struct ContentView: View {
             languageSection
             divider
             temperatureSection
+            displayMethodSection
             divider
             scheduleSection
             divider
@@ -137,6 +138,23 @@ struct ContentView: View {
             .foregroundStyle(.secondary)
 
             Text(text.temperatureHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var displayMethodSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text.displayMethod)
+                .font(.headline)
+            Picker(text.displayMethod, selection: $controller.displayMethod) {
+                ForEach(DisplayMethod.allCases) { method in
+                    Text(method.title(isHungarian: controller.language == .hungarian)).tag(method)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text(text.displayMethodHint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

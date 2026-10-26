@@ -38,6 +38,8 @@ struct NightKText {
     let launchAtLogin: String
     let language: String
     let temperature: String
+    let displayMethod: String
+    let displayMethodHint: String
     let temperatureHint: String
     let schedule: String
     let start: String
@@ -56,6 +58,8 @@ struct NightKText {
         launchAtLogin: "Indítás bejelentkezéskor",
         language: "Nyelv",
         temperature: "Hőmérséklet",
+        displayMethod: "Kijelzőkezelés",
+        displayMethodHint: "Kompatibilis: meleg színréteg. A 27.2-es M5 Pro kijelzőhibát kerüli meg; nem színkalibráció.",
         temperatureHint: "Alacsonyabb érték = melegebb, narancsosabb kép.",
         schedule: "Időzítés",
         start: "Kezdés",
@@ -75,6 +79,8 @@ struct NightKText {
         launchAtLogin: "Launch at login",
         language: "Language",
         temperature: "Temperature",
+        displayMethod: "Display method",
+        displayMethodHint: "Compatible: warm color overlay. Works around the M5 Pro 27.2 display issue; not color calibration.",
         temperatureHint: "Lower value = warmer, more orange display.",
         schedule: "Schedule",
         start: "Start",
@@ -108,6 +114,13 @@ final class NightKController: ObservableObject {
         didSet {
             save()
             scheduleNextTransition()
+            applyDebounced()
+        }
+    }
+
+    @Published var displayMethod: DisplayMethod {
+        didSet {
+            save()
             applyDebounced()
         }
     }
@@ -147,11 +160,13 @@ final class NightKController: ObservableObject {
     private var didRegisterDisplayCallback = false
 
     private let defaults = UserDefaults.standard
+    private let displayOutput = DisplayOutput()
 
     private enum Keys {
         static let isEnabled = "NightK.isEnabled"
         static let gradualTransitionEnabled = "NightK.gradualTransitionEnabled"
         static let temperatureKelvin = "NightK.temperatureKelvin"
+        static let displayMethod = "NightK.displayMethod"
         static let startHour = "NightK.startHour"
         static let startMinute = "NightK.startMinute"
         static let endHour = "NightK.endHour"
@@ -181,6 +196,7 @@ final class NightKController: ObservableObject {
         let endHour = defaults.object(forKey: Keys.endHour) == nil ? DefaultSchedule.endHour : defaults.integer(forKey: Keys.endHour)
         let endMinute = defaults.object(forKey: Keys.endMinute) == nil ? DefaultSchedule.endMinute : defaults.integer(forKey: Keys.endMinute)
 
+        self.displayMethod = DisplayMethod(rawValue: defaults.string(forKey: Keys.displayMethod) ?? "automatic") ?? .automatic
         self.temperatureKelvin = initialTemperature
         self.isEnabled = initialEnabled
         self.gradualTransitionEnabled = defaults.bool(forKey: Keys.gradualTransitionEnabled)
@@ -251,17 +267,11 @@ final class NightKController: ObservableObject {
     func applyNow() {
         let temperature = effectiveTemperature(at: Date())
 
-        isCurrentlyActive = temperature != nil
-
-        if let temperature {
-            DisplayGamma.applyTemperature(kelvin: temperature)
-        } else {
-            DisplayGamma.restore()
-        }
+        isCurrentlyActive = displayOutput.apply(kelvin: temperature, using: displayMethod) && temperature != nil
     }
 
     func restoreDisplays() {
-        DisplayGamma.restore()
+        displayOutput.restore()
         isCurrentlyActive = false
     }
 
@@ -283,6 +293,7 @@ final class NightKController: ObservableObject {
         defaults.set(isEnabled, forKey: Keys.isEnabled)
         defaults.set(gradualTransitionEnabled, forKey: Keys.gradualTransitionEnabled)
         defaults.set(temperatureKelvin, forKey: Keys.temperatureKelvin)
+        defaults.set(displayMethod.rawValue, forKey: Keys.displayMethod)
         defaults.set(language.rawValue, forKey: Keys.language)
 
         let calendar = Calendar.current
