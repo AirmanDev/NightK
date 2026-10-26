@@ -10,14 +10,13 @@
 
 NightK lives in the menu bar and gently shifts your screen toward warmer
 (more orange) colors during the hours you choose, easy on the eyes at night.
-Normally it adjusts display colour using the CoreGraphics gamma API. On macOS
-27.2 with the M5 Pro Mac17,8, the OS can accept gamma changes without applying
-them to the panel; NightK automatically switches to a click-through, warm tint
-window on that hardware. This is an **approximation**, not a calibrated colour
-transformation: it can lift black levels and alter HDR appearance. Select Gamma
-manually to use the original method, or Compatible to use the overlay on other
-hardware. NightK removes its overlay and restores the normal display settings
-outside the active window and when quitting.
+NightK exclusively uses the **CoreGraphics hardware gamma table API**. It does
+not install colour overlays, virtual displays, or replace ICC colour profiles.
+The macOS 27.2 / M5 Pro OS driver can report success while failing to apply a
+gamma LUT physically. NightK now uses the display's reported gamma table
+capacity (1024 entries on Mac17,8), instead of always writing 256 samples.
+This fixes the buffer-size assumption but **cannot guarantee** the Apple driver
+will apply the data. See `docs/GAMMA-MACOS-27.md`.
 
 ## Features
 
@@ -26,19 +25,14 @@ outside the active window and when quitting.
 - Optional **gradual transition** that eases the warming in during the hour
   before the start time and back out over the last, instead of snapping on/off.
 - Adjustable color **temperature** from 1000 K to 6500 K.
-- **Automatic / Gamma / Compatible** display rendering selector. Automatic uses
-  the compatible overlay on macOS 27.2 + Mac17,8 only; other systems keep gamma.
-- Compatible mode uses AppKit panels across Spaces and displays, ignores mouse
-  events, requires no private APIs or screen-recording permission, and is removed
-  on disable, reset, or exit. Its opacity approximates warmth; the Kelvin number
-  is not a physically accurate white-point calibration in this mode.
 - Works across **multiple displays** and re-applies on wake / display changes.
 - **English / Hungarian** UI.
 - Sandboxed menu-bar agent: no Dock icon, minimal CPU/RAM.
+- Gamma LUT capacity detection, API error diagnostics, and isolated curve tests.
 
-Run the isolated colour-policy regression suite with
-`scripts/test-display-compatibility.sh` (does not change the display), then
-compile with `scripts/release.sh build` before installing.
+Run `scripts/test-gamma.sh` for curve regression tests and
+`scripts/release.sh build` to check Release compilation. The app does **not**
+claim gamma is visible merely because CoreGraphics returns success.
 
 ## Requirements
 

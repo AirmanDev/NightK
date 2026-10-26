@@ -31,41 +31,37 @@ build() {
 
 install_app() {
     build
-    echo "==> Verifying signed release before changing the installed copy"
     codesign --verify --deep --strict "$APP"
-    local stage old
+    local stage previous
     stage="$(mktemp -d /Applications/.NightK-install.XXXXXXXX)"
-    old="$stage/original.app"
+    previous="$stage/previous.app"
     ditto "$APP" "$stage/$APP_NAME.app"
     codesign --verify --deep --strict "$stage/$APP_NAME.app"
-
-    echo "==> Switching installed app (automatic rollback on failed launch)"
+    echo "==> Replacing the installed app (rollback on failed launch)"
     pkill -f "^$DEST/Contents/MacOS/$APP_NAME$" 2>/dev/null || true
     sleep 1
-    if [[ -d "$DEST" ]]; then
-        mv "$DEST" "$old"
-    fi
+    if [[ -d "$DEST" ]]; then mv "$DEST" "$previous"; fi
     if ! mv "$stage/$APP_NAME.app" "$DEST"; then
-        [[ ! -d "$old" ]] || mv "$old" "$DEST"
+        [[ ! -d "$previous" ]] || mv "$previous" "$DEST"
         rm -rf "$stage"
         return 1
     fi
     if ! open "$DEST"; then
         rm -rf "$DEST"
-        [[ ! -d "$old" ]] || { mv "$old" "$DEST"; open "$DEST" || true; }
+        [[ ! -d "$previous" ]] || { mv "$previous" "$DEST"; open "$DEST" || true; }
         rm -rf "$stage"
         return 1
     fi
     sleep 3
     if ! pgrep -f "^$DEST/Contents/MacOS/$APP_NAME$" >/dev/null; then
-        echo "NightK failed to launch; restoring previous app" >&2
         rm -rf "$DEST"
-        [[ ! -d "$old" ]] || { mv "$old" "$DEST"; open "$DEST" || true; }
+        [[ ! -d "$previous" ]] || { mv "$previous" "$DEST"; open "$DEST" || true; }
         rm -rf "$stage"
+        echo "NightK failed to launch; previous version restored" >&2
         return 1
     fi
     rm -rf "$stage"
-    echo "==> Done: installed and running from /Applications"
+    echo "==> Installed and launched $DEST"
 }
 
 make_dmg() {
@@ -86,7 +82,7 @@ make_dmg() {
     fi
     mv -f "$candidate" "$DIST/$APP_NAME.dmg"
     rm -rf "$stage"
-    echo "==> Verified and atomically replaced: $DIST/$APP_NAME.dmg"
+    echo "==> Verified DMG: $DIST/$APP_NAME.dmg"
 }
 
 case "${1:-install}" in
