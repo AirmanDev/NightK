@@ -4,7 +4,8 @@ import CoreGraphics
 enum DisplayGamma {
     private static let tableSize = 256
 
-    static func applyTemperature(kelvin: Int) {
+    @discardableResult
+    static func applyTemperature(kelvin: Int) -> Bool {
         let safeKelvin = kelvin.clamped(to: Temperature.range)
         let multipliers = rgbMultipliers(forKelvin: safeKelvin)
 
@@ -24,9 +25,15 @@ enum DisplayGamma {
             blue.append(CGGammaValue((input * multipliers.blue).clamped(to: 0...1)))
         }
 
-        for display in activeDisplays() {
-            applyTables(to: display, red: red, green: green, blue: blue)
+        let displays = activeDisplays()
+        guard !displays.isEmpty else { return false }
+        var succeeded = true
+        for display in displays {
+            if !applyTables(to: display, red: red, green: green, blue: blue) {
+                succeeded = false
+            }
         }
+        return succeeded
     }
 
     static func restore() {
@@ -38,8 +45,8 @@ enum DisplayGamma {
         red: [CGGammaValue],
         green: [CGGammaValue],
         blue: [CGGammaValue]
-    ) {
-        red.withUnsafeBufferPointer { redPointer in
+    ) -> Bool {
+        return red.withUnsafeBufferPointer { redPointer in
             green.withUnsafeBufferPointer { greenPointer in
                 blue.withUnsafeBufferPointer { bluePointer in
                     guard
@@ -47,16 +54,16 @@ enum DisplayGamma {
                         let greenBase = greenPointer.baseAddress,
                         let blueBase = bluePointer.baseAddress
                     else {
-                        return
+                        return false
                     }
 
-                    _ = CGSetDisplayTransferByTable(
+                    return CGSetDisplayTransferByTable(
                         display,
                         UInt32(tableSize),
                         redBase,
                         greenBase,
                         blueBase
-                    )
+                    ) == .success
                 }
             }
         }
@@ -82,7 +89,7 @@ enum DisplayGamma {
     }
 
     /// Tanner Helland's black-body approximation; valid for 1000K–40000K.
-    private static func rgbMultipliers(forKelvin kelvin: Int) -> (red: Float, green: Float, blue: Float) {
+    static func rgbMultipliers(forKelvin kelvin: Int) -> (red: Float, green: Float, blue: Float) {
         let temperature = Float(kelvin.clamped(to: 1000...40000)) / 100.0
 
         let red: Float
